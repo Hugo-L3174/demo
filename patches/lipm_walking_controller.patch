@@ -1,0 +1,26 @@
+diff --git a/src/ModelPredictiveControl.cpp b/src/ModelPredictiveControl.cpp
+index 38806b7..4f90a62 100644
+--- a/src/ModelPredictiveControl.cpp
++++ b/src/ModelPredictiveControl.cpp
+@@ -91,7 +91,7 @@ void ModelPredictiveControl::addGUIElements(std::shared_ptr<mc_rtc::gui::StateBu
+   using namespace mc_rtc::gui;
+   gui->addElement({"Walking", "CoM"},
+                   ComboInput("MPC QP solver", {"QuadProgDense", "QLD"},
+-                             [this]() {
++                             [this]() -> std::string {
+                                switch(solver_)
+                                {
+                                  case copra::SolverFlag::QLD:
+diff --git a/src/PlanInterpolator.cpp b/src/PlanInterpolator.cpp
+index 4148b39..109d536 100644
+--- a/src/PlanInterpolator.cpp
++++ b/src/PlanInterpolator.cpp
+@@ -64,7 +64,7 @@ void PlanInterpolator::addGUIElements()
+       {"Walking", "Footsteps"}, Label("Plan name", [this]() { return customPlan_.name; }),
+       ComboInput("Gait", {"Walk", "Shuffle", "Turn"}, [this]() { return gait(); },
+                  [this](const std::string & dir) { gait(dir); }),
+-      ComboInput("Lead foot", {"Left", "Right"}, [this]() { return (startWithRightFootstep_) ? "Right" : "Left"; },
++      ComboInput("Lead foot", {"Left", "Right"}, [this]() -> std::string { return (startWithRightFootstep_) ? "Right" : "Left"; },
+                  [this](const std::string & footName) {
+                    startWithRightFootstep_ = (footName == "Right");
+                    run();

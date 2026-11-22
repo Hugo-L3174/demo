@@ -1,0 +1,17 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index f7cd493e..0fcf9d32 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -198,7 +198,11 @@ endif()
+ if(${BUILD_BENCHMARKS})
+   add_subdirectory(benchmarks)
+ endif()
+-add_subdirectory(utils)
++if(NOT EMSCRIPTEN)
++  # utils subfolder not needed in wasm
++  add_subdirectory(utils)
++endif()
+ 
+ if(${PYTHON_BINDING})
+  add_subdirectory(binding/python)
+

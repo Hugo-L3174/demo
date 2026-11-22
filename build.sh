@@ -37,17 +37,30 @@ then
   cd $this_dir
   git clone https://github.com/emscripten-core/emsdk.git
 fi
+cd $this_dir/emsdk
+# Use emsdk version from the original demo (Node 12)
+git checkout --detach 2.0.9
 if [ ! -f $this_dir/emsdk/upstream/emscripten/emcc ]
 then
-  cd $this_dir/emsdk
-  ./emsdk install latest
-  ./emsdk activate latest
+  ./emsdk install 2.0.9
 fi
+./emsdk activate 2.0.9
 source $this_dir/emsdk/emsdk_env.sh
 export EM_PREFIX=$EMSDK/upstream/emscripten/system
+export EM_PKG_CONFIG_PATH="$EM_PREFIX/share/pkgconfig${EM_PKG_CONFIG_PATH:+:$EM_PKG_CONFIG_PATH}"
+export PKG_CONFIG_PATH="$EM_PKG_CONFIG_PATH${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 echo "::endgroup::"
 
 export FORCE_JRL_CMAKEMODULES_UPDATE=false
+
+# Helper to check out a specific tag or branch
+checkout_ref()
+{
+  repo=$1
+  ref=$2
+  git -C "$repo" fetch --tags origin
+  git -C "$repo" checkout "$ref"
+}
 
 # Helper function to build a CMake project
 build_cmake_project()
@@ -55,22 +68,76 @@ build_cmake_project()
   name=$1
   src=$2
   # FIXME Work around for project that use jrl-cmakemodules but don't have jrl-cmakemodules#459
-  if $FORCE_JRL_CMAKEMODULES_UPDATE && [ -d $src/cmake ]
+  # Some projects also have a cmake/ source folder not the jrl-cmakemodules submodule.
+  # Keep state-observation's release-pinned module: newer versions require
+  # PROJECT_URL before this release defines it.
+  if $FORCE_JRL_CMAKEMODULES_UPDATE && [ -e "$src/cmake/.git" ] && [ "$name" != "state-observation" ]
   then
-    cd $src/cmake
-    git pull origin master
+    checkout_ref "$src/cmake" ac4907c3148ae22357ba82da5e63a6d5ad4f5902
   fi
   # FIXME Patch for Tasks
   if [ $name == "Tasks" ]
   then
     cd $src
     sed -i -e's/add_definitions(-mfpmath=sse -msse2)//' CMakeLists.txt
+    # patch hardcoded shared into static
+    sed -i 's/add_library(Tasks SHARED/add_library(Tasks STATIC/' src/CMakeLists.txt
+  fi
+  if [ $name == "geos" ]
+  then
+    # patch out geos 3.8.0 docs and testing (hardcoded in)
+    sed -i '/target_include_directories(test_geos_unit/,+2d' "$src/doc/CMakeLists.txt"
+  fi
+  if [ $name == "state-observation" ]
+  then
+    # patch shared into static
+    sed -i 's/^[[:space:]]*SHARED[[:space:]]*$/  STATIC/' "$src/src/CMakeLists.txt"
+    # force static boost
+    sed -i 's/SET(Boost_USE_STATIC_LIBS OFF)/SET(Boost_USE_STATIC_LIBS ON)/' "$src/cmake/boost.cmake"
   fi
   mkdir -p $build_dir/$name
   cd $build_dir/$name
-  emcmake $CMAKE $src -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DCMAKE_INSTALL_PREFIX=${EM_PREFIX} ${CMAKE_OPTIONS}
+  emcmake $CMAKE $src -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DCMAKE_INSTALL_PREFIX=${EM_PREFIX} ${CMAKE_OPTIONS} \
+    "-DCMAKE_CROSSCOMPILING_EMULATOR=${EMSDK_NODE};--experimental-wasm-threads;--experimental-wasm-bulk-memory"
   emmake make -j$(nproc)
   emmake make install
+  if [ "$name" == "state-observation" ]
+  then
+    # patch the config for state-observation to export static lib
+    cmake_package_dir="$EM_PREFIX/lib/cmake/state-observation"
+    mkdir -p "$cmake_package_dir"
+    cp "$this_dir/patches/state-observationConfig.cmake" "$cmake_package_dir/state-observationConfig.cmake"
+  fi
+}
+
+# Helper to apply patches if needed
+# @fixme use this and git patches instead of the sed changes from previous section
+apply_local_patch()
+{
+  local name="$1"
+  local repo="$2"
+  local patch="$this_dir/patches/$name.patch"
+
+  if [ ! -f "$patch" ]; then
+    return 0
+  fi
+
+  echo "Applying local patch: $name"
+
+  # Check if patch has already been applied
+  if git -C "$repo" apply --reverse --check "$patch" >/dev/null 2>&1; then
+    echo "Patch already applied: $name"
+    return 0
+  fi
+
+  # Apply after checking
+  if git -C "$repo" apply --check "$patch"; then
+    git -C "$repo" apply "$patch"
+    echo "Patch successfully applied: $name"
+  else
+    echo "ERROR: Cannot apply patch $patch to $repo" >&2
+    return 1
+  fi
 }
 
 # Helper to build from git
@@ -83,14 +150,17 @@ build_git()
   if [ ! -d $src_dir/$name ]
   then
     cd $src_dir
-    git clone --recursive $uri $src_dir/$name
-    cd $src_dir/$name
-    git checkout origin/$branch -B $branch || git checkout $branch -B $branch
-  else
-    cd $src_dir/$name
-    git pull origin $branch
+    # cloning without submodules first
+    git clone $uri $src_dir/$name
   fi
-  git submodule sync --recursive && git submodule update --init --recursive
+
+  # checkout correct tag, then only pull submodules
+  checkout_ref "$src_dir/$name" "$branch"
+  git -C "$src_dir/$name" submodule sync --recursive
+  git -C "$src_dir/$name" submodule update --init --recursive
+
+  # apply patch if local changes needed
+  apply_local_patch $name $src_dir/$name
   build_cmake_project $name $src_dir/$name
   echo "::endgroup::"
 }
@@ -121,9 +191,11 @@ echo "::group::Install Boost 1.74.0"
 if [ ! -d $src_dir/boost_1_74_0 ]
 then
   cd $src_dir
-  wget --quiet https://dl.bintray.com/boostorg/release/1.74.0/source/boost_1_74_0.tar.bz2
+  if [ ! -f boost_1_74_0.tar.bz2 ]
+  then
+    wget --quiet https://archives.boost.io/release/1.74.0/source/boost_1_74_0.tar.bz2
+  fi
   tar xjf boost_1_74_0.tar.bz2
-  rm -f boost_1_74_0.tar.bz2
 fi
 cd $src_dir/boost_1_74_0
 if [ ! -f ./b2 ]
@@ -138,7 +210,7 @@ export LDFLAGS="-s USE_PTHREADS=1 -s DISABLE_EXCEPTION_CATCHING=0"
 
 # Copy our patched jam configuration
 cp $this_dir/emscripten.jam tools/build/src/tools/
-emconfigure ./b2 toolset=emscripten --with-filesystem --with-timer --with-program_options --with-system --with-serialization --prefix=$EM_PREFIX variant=release link=static install
+emconfigure ./b2 toolset=emscripten --with-filesystem --with-timer --with-program_options --with-system --with-serialization --with-thread --with-test --prefix=$EM_PREFIX variant=release link=static install
 echo "::endgroup::"
 
 # Build f2c
@@ -148,6 +220,8 @@ then
   cd $src_dir
   git clone https://github.com/gergondet/libf2c-emscripten.git libf2c-emscripten
 fi
+# Checkout specific commit just in case
+checkout_ref "$src_dir/libf2c-emscripten" 42cc0e2adcee4e0f195bc30ea68b07e54f0d60af
 cd $src_dir/libf2c-emscripten
 emmake make -j$(nproc)
 emmake make install
@@ -164,7 +238,7 @@ export CMAKE_OPTIONS="-DBUILD_SHARED_LIBS=OFF -DASSIMP_BUILD_ALL_EXPORTERS_BY_DE
 build_release assimp assimp-5.0.1 https://github.com/assimp/assimp/archive/v5.0.1.tar.gz
 
 export CMAKE_OPTIONS="-DBUILD_TESTING=OFF -DBUILD_DOCUMENTATION=OFF -DBUILD_SHARED_LIBS=OFF -DDISABLE_GEOS_INLINE=ON"
-build_github libgeos/geos master
+build_github libgeos/geos 3.8.0
 
 export CMAKE_OPTIONS="-DYAML_CPP_BUILD_TESTS=OFF"
 build_release yaml-cpp yaml-cpp-yaml-cpp-0.6.3 https://github.com/jbeder/yaml-cpp/archive/yaml-cpp-0.6.3.tar.gz
@@ -172,46 +246,46 @@ build_release yaml-cpp yaml-cpp-yaml-cpp-0.6.3 https://github.com/jbeder/yaml-cp
 export CMAKE_OPTIONS="-DSPDLOG_BUILD_TESTS=OFF -DSPDLOG_BUILD_SHARED=OFF"
 build_release spdlog spdlog-1.6.1 https://github.com/gabime/spdlog/archive/v1.6.1.tar.gz
 
-export CMAKE_OPTIONS="-DBUILD_TESTING=OFF -DBUILD_PYTHON_INTERFACE=OFF -DINSTALL_DOCUMENTATION=OFF"
-build_github humanoid-path-planner/hpp-spline v4.7.0
+export CMAKE_OPTIONS="-DBUILD_TESTING=OFF -DBUILD_PYTHON_INTERFACE=OFF -DCURVES_WITH_PINOCCHIO_SUPPORT=OFF -DBUILD_SHARED_LIBS=OFF"
+build_github loco-3d/ndcurves v2.0.0
 
 export FORCE_JRL_CMAKEMODULES_UPDATE=true
 
-export CMAKE_OPTIONS="-DBUILD_TESTING=OFF -DPYTHON_BINDING=OFF -DUSE_F2C=ON -DINSTALL_DOCUMENTATION=OFF"
-build_github jrl-umi3218/SpaceVecAlg master
-build_github jrl-umi3218/sch-core master
-build_github jrl-umi3218/eigen-qld master
-build_github jrl-umi3218/RBDyn master
-build_github jrl-umi3218/Tasks master
-build_github jrl-umi3218/mc_rbdyn_urdf master
-build_github jrl-umi3218/mc_rtc_data master
-build_github jrl-umi3218/eigen-quadprog master
-build_github jrl-umi3218/copra master
+export CMAKE_OPTIONS="-DBUILD_TESTING=OFF -DPYTHON_BINDING=OFF -DUSE_F2C=ON -DINSTALL_DOCUMENTATION=OFF -DBUILD_SHARED_LIBS=OFF"
+build_github jrl-umi3218/SpaceVecAlg v1.2.0
+build_github jrl-umi3218/sch-core v1.2.0
+build_github jrl-umi3218/eigen-qld v1.2.1
+build_github jrl-umi3218/RBDyn v1.5.2
+build_github jrl-umi3218/Tasks v1.5.0
+build_github jrl-umi3218/mc_rbdyn_urdf v1.1.0
+build_github jrl-umi3218/mc_rtc_data v1.0.4
+build_github jrl-umi3218/eigen-quadprog v1.1.0
+build_github jrl-umi3218/copra v1.2.2
+build_github jrl-umi3218/state-observation v1.5.0
 
-export CMAKE_OPTIONS="${CMAKE_OPTIONS} -DDISABLE_ROS=ON -DMC_RTC_BUILD_STATIC=ON -DMC_RTC_DISABLE_NETWORK=ON -DJVRC_DESCRIPTION_PATH=/assets/jvrc_description -DMC_ENV_DESCRIPTION_PATH=/assets/mc_env_description -DMC_INT_OBJ_DESCRIPTION_PATH=/assets/mc_int_obj_description -DMC_PANDA_WITH_FRANKA=OFF -DMC_PANDA_DISABLE_XACRO=ON -DPANDA_DESCRIPTION_PATH=/assets/mc_panda"
+export CMAKE_OPTIONS="${CMAKE_OPTIONS} -DDISABLE_ROS=ON -DMC_RTC_BUILD_STATIC=ON -DMC_RTC_DISABLE_NETWORK=ON -DMC_RTC_DISABLE_STACKTRACE=ON -DJVRC_DESCRIPTION_PATH=/assets/jvrc_description -DMC_ENV_DESCRIPTION_PATH=/assets/mc_env_description -DMC_INT_OBJ_DESCRIPTION_PATH=/assets/mc_int_obj_description -DMC_PANDA_WITH_FRANKA=OFF -DMC_PANDA_DISABLE_XACRO=ON -DPANDA_DESCRIPTION_PATH=/assets/mc_panda"
 if [ ! -d $src_dir/mc_rtc ]
 then
-  git clone --recursive -b topic/wasm https://github.com/gergondet/mc_rtc $src_dir/mc_rtc
-else
-  cd $src_dir/mc_rtc
-  git pull origin topic/wasm
+  git clone https://github.com/gergondet/mc_rtc $src_dir/mc_rtc
 fi
+checkout_ref "$src_dir/mc_rtc" topic/wasm
+git -C "$src_dir/mc_rtc" submodule sync --recursive
+git -C "$src_dir/mc_rtc" submodule update --init --recursive
+mkdir -p "$src_dir/mc_rtc/controllers" "$src_dir/mc_rtc/robots"
 cd $src_dir/mc_rtc/controllers/
 if [ ! -d lipm_walking_controller ]
 then
-  git clone --recursive -b topic/wasm https://github.com/gergondet/lipm_walking_controller
-else
-  cd lipm_walking_controller
-  git pull origin topic/wasm
+  git clone https://github.com/gergondet/lipm_walking_controller
 fi
+checkout_ref "$src_dir/mc_rtc/controllers/lipm_walking_controller" topic/wasm
+apply_local_patch "lipm_walking_controller" "$src_dir/mc_rtc/controllers/lipm_walking_controller"
 cd $src_dir/mc_rtc/robots/
 if [ ! -d mc_panda ]
 then
-  git clone --recursive -b topic/NoFrankaOption https://github.com/gergondet/mc_panda
-else
-  cd mc_panda
-  git pull origin topic/NoFrankaOption
+  git clone https://github.com/gergondet/mc_panda
 fi
+checkout_ref "$src_dir/mc_rtc/robots/mc_panda" topic/NoFrankaOption
+apply_local_patch "mc_panda" "$src_dir/mc_rtc/robots/mc_panda"
 cd $this_dir
 build_github gergondet/mc_rtc topic/wasm
 

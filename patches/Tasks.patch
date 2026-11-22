@@ -1,0 +1,26 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 18b4249f..5e9f922f 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -22,7 +22,7 @@ include(cmake/msvc-specific.cmake)
+ project(Tasks CXX)
+ 
+ if(UNIX AND NOT EMSCRIPTEN)
+-  add_definitions(-mfpmath=sse -msse2)
++  
+ endif()
+ 
+ if(NOT WIN32)
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 568c089d..fb938db7 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -17,7 +17,7 @@ endif()
+ 
+ add_project_dependency(Boost REQUIRED COMPONENTS timer)
+ 
+-add_library(Tasks SHARED ${SOURCES} ${HEADERS} ${PRIVATE_HEADERS})
++add_library(Tasks STATIC ${SOURCES} ${HEADERS} ${PRIVATE_HEADERS})
+ target_link_libraries(Tasks PUBLIC RBDyn::RBDyn sch-core::sch-core eigen-qld::eigen-qld Boost::timer Boost::disable_autolinking Boost::dynamic_linking)
+ if(${eigen-lssol_FOUND})
+   target_link_libraries(Tasks PUBLIC eigen-lssol::eigen-lssol)
