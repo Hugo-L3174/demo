@@ -67,51 +67,15 @@ build_cmake_project()
 {
   name=$1
   src=$2
-  # FIXME Work around for project that use jrl-cmakemodules but don't have jrl-cmakemodules#459
-  # Some projects also have a cmake/ source folder not the jrl-cmakemodules submodule.
-  # Keep state-observation's release-pinned module: newer versions require
-  # PROJECT_URL before this release defines it.
-  if $FORCE_JRL_CMAKEMODULES_UPDATE && [ -e "$src/cmake/.git" ] && [ "$name" != "state-observation" ]
-  then
-    checkout_ref "$src/cmake" ac4907c3148ae22357ba82da5e63a6d5ad4f5902
-  fi
-  # FIXME Patch for Tasks
-  if [ $name == "Tasks" ]
-  then
-    cd $src
-    sed -i -e's/add_definitions(-mfpmath=sse -msse2)//' CMakeLists.txt
-    # patch hardcoded shared into static
-    sed -i 's/add_library(Tasks SHARED/add_library(Tasks STATIC/' src/CMakeLists.txt
-  fi
-  if [ $name == "geos" ]
-  then
-    # patch out geos 3.8.0 docs and testing (hardcoded in)
-    sed -i '/target_include_directories(test_geos_unit/,+2d' "$src/doc/CMakeLists.txt"
-  fi
-  if [ $name == "state-observation" ]
-  then
-    # patch shared into static
-    sed -i 's/^[[:space:]]*SHARED[[:space:]]*$/  STATIC/' "$src/src/CMakeLists.txt"
-    # force static boost
-    sed -i 's/SET(Boost_USE_STATIC_LIBS OFF)/SET(Boost_USE_STATIC_LIBS ON)/' "$src/cmake/boost.cmake"
-  fi
   mkdir -p $build_dir/$name
   cd $build_dir/$name
   emcmake $CMAKE $src -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DCMAKE_INSTALL_PREFIX=${EM_PREFIX} ${CMAKE_OPTIONS} \
     "-DCMAKE_CROSSCOMPILING_EMULATOR=${EMSDK_NODE};--experimental-wasm-threads;--experimental-wasm-bulk-memory"
   emmake make -j$(nproc)
   emmake make install
-  if [ "$name" == "state-observation" ]
-  then
-    # patch the config for state-observation to export static lib
-    cmake_package_dir="$EM_PREFIX/lib/cmake/state-observation"
-    mkdir -p "$cmake_package_dir"
-    cp "$this_dir/patches/state-observationConfig.cmake" "$cmake_package_dir/state-observationConfig.cmake"
-  fi
 }
 
 # Helper to apply patches if needed
-# @fixme use this and git patches instead of the sed changes from previous section
 apply_local_patch()
 {
   local name="$1"
@@ -246,7 +210,7 @@ build_release yaml-cpp yaml-cpp-yaml-cpp-0.6.3 https://github.com/jbeder/yaml-cp
 export CMAKE_OPTIONS="-DSPDLOG_BUILD_TESTS=OFF -DSPDLOG_BUILD_SHARED=OFF"
 build_release spdlog spdlog-1.6.1 https://github.com/gabime/spdlog/archive/v1.6.1.tar.gz
 
-export CMAKE_OPTIONS="-DBUILD_TESTING=OFF -DBUILD_PYTHON_INTERFACE=OFF -DCURVES_WITH_PINOCCHIO_SUPPORT=OFF -DBUILD_SHARED_LIBS=OFF"
+export CMAKE_OPTIONS="-DBUILD_TESTING=OFF -DBUILD_DOCUMENTATION=OFF -DBUILD_PYTHON_INTERFACE=OFF -DCURVES_WITH_PINOCCHIO_SUPPORT=OFF -DBUILD_SHARED_LIBS=OFF"
 build_github loco-3d/ndcurves v2.0.0
 
 export FORCE_JRL_CMAKEMODULES_UPDATE=true

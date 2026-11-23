@@ -1,8 +1,8 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index f7cd493e..0fcf9d32 100644
+index f7cd493e..0d395e13 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -198,7 +198,11 @@ endif()
+@@ -198,7 +198,10 @@ endif()
  if(${BUILD_BENCHMARKS})
    add_subdirectory(benchmarks)
  endif()
@@ -14,4 +14,3 @@ index f7cd493e..0fcf9d32 100644
  
  if(${PYTHON_BINDING})
   add_subdirectory(binding/python)
-
