@@ -25,6 +25,13 @@ jobs:
           chmod +x ./build.sh
           ./build.sh
 
+      # Service worker to handle cross-origin isolation
+      # @fixme host the html in the demo repo instead of the gui lib repo
+      - name: Configure cross-origin isolation
+        run: |
+          sed -i 's|<head>|<head><script src="./coi-serviceworker.js"></script>|' artifacts/index.html
+          cp third-party/coi-serviceworker.js artifacts/
+
       - name: Upload website artifacts
         uses: actions/upload-pages-artifact@v4
         with:
